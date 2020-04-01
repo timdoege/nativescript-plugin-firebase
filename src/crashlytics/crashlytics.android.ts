@@ -1,3 +1,6 @@
+import { ENABLE_CRASHLYTICS_HINT } from "./crashlytics-common";
+import * as appModule from 'tns-core-modules/application';
+
 declare const com: any;
 
 export function sendCrashLog(exception: any /* java.lang.Exception */): void {
@@ -61,14 +64,14 @@ export function crash(): void {
 export function setCrashlyticsCollectionEnabled(enabled: boolean): void {
   if (isCrashlyticsAvailable()) {
     io.fabric.sdk.android.Fabric.with(
-        com.tns.NativeScriptApplication.getInstance(),
+        appModule.getNativeApplication(),
         [new com.crashlytics.android.Crashlytics()]);
   }
 }
 
 function isCrashlyticsAvailable(): boolean {
   if (typeof (com.crashlytics) === "undefined" || typeof (com.crashlytics.android.Crashlytics) === "undefined") {
-    console.log("Add 'crashlytics: true' to firebase.nativescript.json and remove the platforms folder");
+    console.log(ENABLE_CRASHLYTICS_HINT);
     return false;
   }
   return true;

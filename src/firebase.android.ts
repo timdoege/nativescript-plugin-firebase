@@ -31,6 +31,7 @@ firebase._cachedDynamicLink = null;
 // we need to cache and restore the context, otherwise the next invocation is broken
 firebase._googleSignInIdToken = null;
 firebase._facebookAccessToken = null;
+firebase._appleSignInIdToken = null;
 
 let fbCallbackManager = null;
 let initializeArguments: any;
@@ -299,20 +300,18 @@ firebase.init = arg => {
       arg = arg || {};
       initializeArguments = arg;
 
-      com.google.firebase.analytics.FirebaseAnalytics.getInstance(
-          appModule.android.context || com.tns.NativeScriptApplication.getInstance()
-      ).setAnalyticsCollectionEnabled(arg.analyticsCollectionEnabled !== false);
+      if (typeof (com.google.firebase.analytics) !== "undefined" && typeof (com.google.firebase.analytics.FirebaseAnalytics) !== "undefined") {
+        com.google.firebase.analytics.FirebaseAnalytics.getInstance(
+          appModule.android.context || appModule.getNativeApplication()
+        ).setAnalyticsCollectionEnabled(arg.analyticsCollectionEnabled !== false);
+      }
 
       // note that this only makes sense if crash reporting was disabled in AndroidManifest.xml
       if (arg.crashlyticsCollectionEnabled && typeof (com.crashlytics) !== "undefined" && typeof (com.crashlytics.android.Crashlytics) !== "undefined") {
         io.fabric.sdk.android.Fabric.with(
-            appModule.android.context || com.tns.NativeScriptApplication.getInstance(),
-            [new com.crashlytics.android.Crashlytics()]);
+          appModule.android.context || appModule.getNativeApplication(),
+          [new com.crashlytics.android.Crashlytics()]);
       }
-
-      com.google.firebase.analytics.FirebaseAnalytics.getInstance(
-          appModule.android.context || com.tns.NativeScriptApplication.getInstance()
-      ).setAnalyticsCollectionEnabled(arg.analyticsCollectionEnabled !== false);
 
       if (typeof (com.google.firebase.database) !== "undefined" && typeof (com.google.firebase.database.ServerValue) !== "undefined") {
         firebase.ServerValue = {
@@ -333,9 +332,9 @@ firebase.init = arg => {
       if (arg.persist === false && typeof (com.google.firebase.firestore) !== "undefined") {
         try {
           com.google.firebase.firestore.FirebaseFirestore.getInstance().setFirestoreSettings(
-              new com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
-                  .setPersistenceEnabled(false)
-                  .build());
+            new com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
+              .setPersistenceEnabled(false)
+              .build());
         } catch (ignore) {
           // this may happen during livesync, and without catching this exception the app would crash
         }
@@ -479,7 +478,7 @@ firebase.getRemoteConfigDefaults = properties => {
 };
 
 firebase._isGooglePlayServicesAvailable = () => {
-  const ctx = appModule.android.foregroundActivity || appModule.android.startActivity || com.tns.NativeScriptApplication.getInstance();
+  const ctx = appModule.android.foregroundActivity || appModule.android.startActivity || appModule.getNativeApplication();
   const googleApiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance();
   const playServiceStatusSuccess = 0; // com.google.android.gms.common.ConnectionResult.SUCCESS;
   const playServicesStatus = googleApiAvailability.isGooglePlayServicesAvailable(ctx);
@@ -523,78 +522,76 @@ firebase.getRemoteConfig = arg => {
         remoteConfigSettingsBuilder.setFetchTimeoutInSeconds(0);
       }
 
-      const addOnSetDefaultsCompleteListener = new gmsTasks.OnCompleteListener({
-        onComplete: task => {
-          if (!task.isSuccessful()) {
-            reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
-          } else {
-            const returnMethod = throttled => {
-              const addOnCompleteActivateListener = new gmsTasks.OnCompleteListener({
-                onComplete: task => {
-                  if (!task.isSuccessful()) {
-                    reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
-                  } else {
-                    const lastFetchTime = firebaseRemoteConfig.getInfo().getFetchTimeMillis();
-                    const lastFetch = new Date(lastFetchTime);
-
-                    const result = {
-                      lastFetch,
-                      throttled,
-                      properties: {}
-                    };
-
-                    for (const p in arg.properties) {
-                      const prop = arg.properties[p];
-                      const key = prop.key;
-                      const value = firebaseRemoteConfig.getString(key);
-                      // we could have the user pass in the type but this seems easier to use
-                      result.properties[key] = firebase.strongTypeify(value);
-                    }
-                    resolve(result);
-                  }
-                }
-              });
-              firebaseRemoteConfig.activate().addOnCompleteListener(addOnCompleteActivateListener);
-            };
-
-            const onSuccessListener = new gmsTasks.OnSuccessListener({
-              onSuccess: () => returnMethod(false)
-            });
-
-            const onFailureListener = new gmsTasks.OnFailureListener({
-              onFailure: exception => {
-                if (exception.getMessage() === "com.google.firebase.remoteconfig.FirebaseRemoteConfigFetchThrottledException") {
-                  returnMethod(true);
-                } else {
-                  reject("Retrieving remote config data failed. " + exception);
-                }
-              }
-            });
-
-            // default 12 hours, just like the SDK does
-            const expirationDuration = arg.cacheExpirationSeconds || 43200;
-
-            firebaseRemoteConfig.fetch(expirationDuration)
-                .addOnSuccessListener(onSuccessListener)
-                .addOnFailureListener(onFailureListener);
-          }
-        }
-      });
-
-      const addOnSetConfigSettingsCompleteListener = new gmsTasks.OnCompleteListener({
+      const onSetConfigSettingsCompleteListener = new gmsTasks.OnCompleteListener({
         onComplete: task => {
           if (!task.isSuccessful()) {
             reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
           } else {
             const defaults = firebase.getRemoteConfigDefaults(arg.properties);
             firebaseRemoteConfig.setDefaultsAsync(firebase.toHashMap(defaults))
-                .addOnCompleteListener(addOnSetDefaultsCompleteListener);
+              .addOnCompleteListener(new gmsTasks.OnCompleteListener({
+                onComplete: task => {
+                  if (!task.isSuccessful()) {
+                    reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
+                  } else {
+                    const returnMethod = throttled => {
+                      const addOnCompleteActivateListener = new gmsTasks.OnCompleteListener({
+                        onComplete: task => {
+                          if (!task.isSuccessful()) {
+                            reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
+                          } else {
+                            const lastFetchTime = firebaseRemoteConfig.getInfo().getFetchTimeMillis();
+                            const lastFetch = new Date(lastFetchTime);
+
+                            const result = {
+                              lastFetch,
+                              throttled,
+                              properties: {}
+                            };
+
+                            for (const p in arg.properties) {
+                              const prop = arg.properties[p];
+                              const key = prop.key;
+                              const value = firebaseRemoteConfig.getString(key);
+                              // we could have the user pass in the type but this seems easier to use
+                              result.properties[key] = firebase.strongTypeify(value);
+                            }
+                            resolve(result);
+                          }
+                        }
+                      });
+                      firebaseRemoteConfig.activate().addOnCompleteListener(addOnCompleteActivateListener);
+                    };
+
+                    const onSuccessListener = new gmsTasks.OnSuccessListener({
+                      onSuccess: () => returnMethod(false)
+                    });
+
+                    const onFailureListener = new gmsTasks.OnFailureListener({
+                      onFailure: exception => {
+                        if (exception.getMessage() === "com.google.firebase.remoteconfig.FirebaseRemoteConfigFetchThrottledException") {
+                          returnMethod(true);
+                        } else {
+                          reject("Retrieving remote config data failed. " + exception);
+                        }
+                      }
+                    });
+
+                    // default 12 hours, just like the SDK does
+                    const expirationDuration = arg.cacheExpirationSeconds || 43200;
+
+                    firebaseRemoteConfig.fetch(expirationDuration)
+                      .addOnSuccessListener(onSuccessListener)
+                      .addOnFailureListener(onFailureListener);
+                  }
+                }
+              }));
           }
         }
       });
 
       firebaseRemoteConfig.setConfigSettingsAsync(remoteConfigSettingsBuilder.build())
-          .addOnCompleteListener(addOnSetConfigSettingsCompleteListener);
+        .addOnCompleteListener(onSetConfigSettingsCompleteListener);
 
     };
 
@@ -712,16 +709,16 @@ firebase.unlink = providerId => {
       }
 
       user.unlink(providerId)
-          .addOnCompleteListener(new gmsTasks.OnCompleteListener({
-                onComplete: task => {
-                  if (task.isSuccessful()) {
-                    resolve();
-                  } else {
-                    reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
-                  }
-                }
-              })
-          );
+        .addOnCompleteListener(new gmsTasks.OnCompleteListener({
+          onComplete: task => {
+            if (task.isSuccessful()) {
+              resolve();
+            } else {
+              reject((task.getException() && task.getException().getReason ? task.getException().getReason() : task.getException()));
+            }
+          }
+        })
+        );
     } catch (ex) {
       console.log("Error in firebase.unlink: " + ex);
       reject(ex);
@@ -755,8 +752,8 @@ firebase.getAuthToken = (arg: GetAuthTokenOptions): Promise<IdTokenResult> => {
         });
 
         user.getIdToken(arg.forceRefresh)
-            .addOnSuccessListener(onSuccessListener)
-            .addOnFailureListener(onFailureListener);
+          .addOnSuccessListener(onSuccessListener)
+          .addOnFailureListener(onFailureListener);
 
       } else {
         reject("Log in first");
@@ -783,11 +780,13 @@ function toLoginResult(user, additionalUserInfo?): User {
   for (let i = 0; i < providerData.size(); i++) {
     const pid = providerData.get(i).getProviderId();
     if (pid === 'facebook.com') {
-      providers.push({id: pid, token: firebase._facebookAccessToken});
+      providers.push({ id: pid, token: firebase._facebookAccessToken });
     } else if (pid === 'google.com') {
-      providers.push({id: pid, token: firebase._googleSignInIdToken});
+      providers.push({ id: pid, token: firebase._googleSignInIdToken });
+    } else if (pid === 'apple.com') {
+      providers.push({ id: pid, token: firebase._appleSignInIdToken });
     } else {
-      providers.push({id: pid});
+      providers.push({ id: pid });
     }
   }
 
@@ -807,14 +806,14 @@ function toLoginResult(user, additionalUserInfo?): User {
       lastSignInTimestamp: user.getMetadata() ? new Date(user.getMetadata().getLastSignInTimestamp() as number) : null
     },
     getIdToken: (forceRefresh?: boolean) => new Promise((resolve, reject) => {
-      firebase.getAuthToken({forceRefresh})
-          .then((result: IdTokenResult) => resolve(result.token))
-          .catch(reject);
+      firebase.getAuthToken({ forceRefresh })
+        .then((result: IdTokenResult) => resolve(result.token))
+        .catch(reject);
     }),
     getIdTokenResult: (forceRefresh?: boolean) => new Promise((resolve, reject) => {
-      firebase.getAuthToken({forceRefresh})
-          .then((result: IdTokenResult) => resolve(result))
-          .catch(reject);
+      firebase.getAuthToken({ forceRefresh })
+        .then((result: IdTokenResult) => resolve(result))
+        .catch(reject);
     }),
     sendEmailVerification: (actionCodeSettings?: ActionCodeSettings) => firebase.sendEmailVerification(actionCodeSettings)
   };
@@ -896,15 +895,15 @@ firebase.login = arg => {
         }
 
         const actionCodeSettings = com.google.firebase.auth.ActionCodeSettings.newBuilder()
-        // URL you want to redirect back to. The domain must be whitelisted in the Firebase Console.
-            .setUrl(arg.emailLinkOptions.url)
-            .setHandleCodeInApp(true)
-            .setIOSBundleId(arg.emailLinkOptions.iOS ? arg.emailLinkOptions.iOS.bundleId : appModule.android.context.getPackageName())
-            .setAndroidPackageName(
-                arg.emailLinkOptions.android ? arg.emailLinkOptions.android.packageName : appModule.android.context.getPackageName(),
-                arg.emailLinkOptions.android ? arg.emailLinkOptions.android.installApp || false : false,
-                arg.emailLinkOptions.android ? arg.emailLinkOptions.android.minimumVersion || "1" : "1")
-            .build();
+          // URL you want to redirect back to. The domain must be whitelisted in the Firebase Console.
+          .setUrl(arg.emailLinkOptions.url)
+          .setHandleCodeInApp(true)
+          .setIOSBundleId(arg.emailLinkOptions.iOS ? arg.emailLinkOptions.iOS.bundleId : appModule.android.context.getPackageName())
+          .setAndroidPackageName(
+            arg.emailLinkOptions.android ? arg.emailLinkOptions.android.packageName : appModule.android.context.getPackageName(),
+            arg.emailLinkOptions.android ? arg.emailLinkOptions.android.installApp || false : false,
+            arg.emailLinkOptions.android ? arg.emailLinkOptions.android.minimumVersion || "1" : "1")
+          .build();
 
         const onEmailLinkCompleteListener = new gmsTasks.OnCompleteListener({
           onComplete: task => {
@@ -984,12 +983,13 @@ firebase.login = arg => {
 
         firebase._verifyPhoneNumberInProgress = true;
 
+        let timeout = arg.phoneOptions.android ? arg.phoneOptions.android.timeout : 60;
         com.google.firebase.auth.PhoneAuthProvider.getInstance().verifyPhoneNumber(
-            arg.phoneOptions.phoneNumber,
-            60, // timeout (in seconds, because of the next argument)
-            java.util.concurrent.TimeUnit.SECONDS,
-            appModule.android.foregroundActivity,
-            new OnVerificationStateChangedCallbacks());
+          arg.phoneOptions.phoneNumber,
+          timeout, // timeout (in seconds, because of the next argument)
+          java.util.concurrent.TimeUnit.SECONDS,
+          appModule.android.foregroundActivity,
+          new OnVerificationStateChangedCallbacks());
 
       } else if (arg.type === firebase.LoginType.CUSTOM) {
         if (!arg.customOptions || (!arg.customOptions.token && !arg.customOptions.tokenProviderFn)) {
@@ -1001,14 +1001,14 @@ firebase.login = arg => {
           firebaseAuth.signInWithCustomToken(arg.customOptions.token).addOnCompleteListener(onCompleteListener);
         } else if (arg.customOptions.tokenProviderFn) {
           arg.customOptions.tokenProviderFn()
-              .then(
-                  token => {
-                    firebaseAuth.signInWithCustomToken(token).addOnCompleteListener(onCompleteListener);
-                  },
-                  error => {
-                    reject(error);
-                  }
-              );
+            .then(
+              token => {
+                firebaseAuth.signInWithCustomToken(token).addOnCompleteListener(onCompleteListener);
+              },
+              error => {
+                reject(error);
+              }
+            );
         }
 
       } else if (arg.type === firebase.LoginType.FACEBOOK) {
@@ -1019,7 +1019,7 @@ firebase.login = arg => {
 
         // Lazy loading the Facebook callback manager
         if (!fbCallbackManager) {
-          com.facebook.FacebookSdk.sdkInitialize(com.tns.NativeScriptApplication.getInstance());
+          com.facebook.FacebookSdk.sdkInitialize(appModule.getNativeApplication());
           fbCallbackManager = com.facebook.CallbackManager.Factory.create();
         }
 
@@ -1031,36 +1031,83 @@ firebase.login = arg => {
 
         const fbLoginManager = com.facebook.login.LoginManager.getInstance();
         fbLoginManager.registerCallback(
-            fbCallbackManager,
-            new com.facebook.FacebookCallback({
-              onSuccess: loginResult => {
-                firebase._facebookAccessToken = loginResult.getAccessToken().getToken();
-                const authCredential = com.google.firebase.auth.FacebookAuthProvider.getCredential(firebase._facebookAccessToken);
+          fbCallbackManager,
+          new com.facebook.FacebookCallback({
+            onSuccess: loginResult => {
+              firebase._facebookAccessToken = loginResult.getAccessToken().getToken();
+              const authCredential = com.google.firebase.auth.FacebookAuthProvider.getCredential(firebase._facebookAccessToken);
 
-                const user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
-                if (user) {
-                  if (firebase._alreadyLinkedToAuthProvider(user, "facebook.com")) {
-                    firebaseAuth.signInWithCredential(authCredential).addOnCompleteListener(onCompleteListener);
-                  } else {
-                    user.linkWithCredential(authCredential).addOnCompleteListener(onCompleteListener);
-                  }
-                } else {
+              const user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
+              if (user) {
+                if (firebase._alreadyLinkedToAuthProvider(user, "facebook.com")) {
                   firebaseAuth.signInWithCredential(authCredential).addOnCompleteListener(onCompleteListener);
+                } else {
+                  user.linkWithCredential(authCredential).addOnCompleteListener(onCompleteListener);
                 }
-              },
-              onCancel: () => reject("Facebook Login canceled"),
-              onError: ex => reject("Error while trying to login with Fb " + ex)
-            })
+              } else {
+                firebaseAuth.signInWithCredential(authCredential).addOnCompleteListener(onCompleteListener);
+              }
+            },
+            onCancel: () => reject("Facebook Login canceled"),
+            onError: ex => reject("Error while trying to login with Fb " + ex)
+          })
         );
 
-        let scope = ["public_profile", "email"];
-        if (arg.facebookOptions && arg.facebookOptions.scope) {
-          scope = arg.facebookOptions.scope;
+        let scopes = ["public_profile", "email"];
+        if (arg.facebookOptions && arg.facebookOptions.scopes) {
+          scopes = arg.facebookOptions.scopes;
         }
-        const permissions = AndroidUtils.collections.stringArrayToStringSet(scope);
+        const permissions = AndroidUtils.collections.stringArrayToStringSet(scopes);
 
         const activity = appModule.android.foregroundActivity;
         fbLoginManager.logInWithReadPermissions(activity, permissions);
+
+      } else if (arg.type === firebase.LoginType.APPLE) {
+        const onSuccessListener = new gmsTasks.OnSuccessListener({
+          onSuccess: (authResult: com.google.firebase.auth.AuthResult) => {
+            firebase._appleSignInIdToken = (<any>authResult.getCredential()).getIdToken();
+            const loginResult = toLoginResult(authResult.getUser(), authResult.getAdditionalUserInfo());
+            firebase.notifyAuthStateListeners({
+              loggedIn: true,
+              user: loginResult
+            });
+            resolve(loginResult);
+            // TODO for reauth and linking, see https://firebase.google.com/docs/auth/android/apple#reauthentication_and_account_linking
+          }
+        });
+
+        const onFailureListener = new gmsTasks.OnFailureListener({
+          onFailure: exception => {
+            reject(exception.getMessage());
+          }
+        });
+
+        const pendingAuthResult = firebaseAuth.getPendingAuthResult();
+        if (pendingAuthResult) {
+          pendingAuthResult
+            .addOnSuccessListener(onSuccessListener)
+            .addOnFailureListener(onFailureListener);
+
+        } else {
+          // no pending result; start the sign in flow
+          const oAuthProviderBuilder = com.google.firebase.auth.OAuthProvider.newBuilder("apple.com");
+
+          let scopes = ["name", "email"];
+          if (arg.appleOptions && arg.appleOptions.scopes) {
+            scopes = arg.appleOptions.scopes;
+          }
+          oAuthProviderBuilder.setScopes(firebase.toJavaArray(scopes));
+
+          if (arg.appleOptions && arg.appleOptions.locale) {
+            oAuthProviderBuilder.addCustomParameter("locale", arg.appleOptions.locale);
+          }
+
+          const provider = oAuthProviderBuilder.build();
+
+          firebaseAuth.startActivityForSignInWithProvider(appModule.android.foregroundActivity || appModule.android.startActivity, provider)
+            .addOnSuccessListener(onSuccessListener)
+            .addOnFailureListener(onFailureListener);
+        }
 
       } else if (arg.type === firebase.LoginType.GOOGLE) {
         if (typeof (com.google.android.gms.auth.api.Auth) === "undefined") {
@@ -1073,8 +1120,8 @@ firebase.login = arg => {
 
         // Configure Google Sign In
         const googleSignInOptionsBuilder = new com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(clientId)
-            .requestEmail();
+          .requestIdToken(clientId)
+          .requestEmail();
 
         if (arg.googleOptions && arg.googleOptions.hostedDomain) {
           googleSignInOptionsBuilder.setHostedDomain(arg.googleOptions.hostedDomain);
@@ -1096,10 +1143,10 @@ firebase.login = arg => {
           }
         });
 
-        firebase._mGoogleApiClient = new com.google.android.gms.common.api.GoogleApiClient.Builder(com.tns.NativeScriptApplication.getInstance())
-            .addOnConnectionFailedListener(onConnectionFailedListener)
-            .addApi(com.google.android.gms.auth.api.Auth.GOOGLE_SIGN_IN_API, googleSignInOptions)
-            .build();
+        firebase._mGoogleApiClient = new com.google.android.gms.common.api.GoogleApiClient.Builder(appModule.getNativeApplication())
+          .addOnConnectionFailedListener(onConnectionFailedListener)
+          .addApi(com.google.android.gms.auth.api.Auth.GOOGLE_SIGN_IN_API, googleSignInOptions)
+          .build();
 
         const signInIntent = com.google.android.gms.auth.api.Auth.GoogleSignInApi.getSignInIntent(firebase._mGoogleApiClient);
         (appModule.android.foregroundActivity || appModule.android.startActivity).startActivityForResult(signInIntent, GOOGLE_SIGNIN_INTENT_ID);
@@ -1108,6 +1155,11 @@ firebase.login = arg => {
           if (eventData.requestCode === GOOGLE_SIGNIN_INTENT_ID) {
             appModule.android.off(appModule.AndroidApplication.activityResultEvent, callback);
             const googleSignInResult = com.google.android.gms.auth.api.Auth.GoogleSignInApi.getSignInResultFromIntent(eventData.intent);
+            if (googleSignInResult === null) {
+              reject("No googleSignInResult, eventData.intent seems to be invalid");
+              return;
+            }
+
             const success = googleSignInResult.isSuccess();
             if (success) {
               const googleSignInAccount = googleSignInResult.getSignInAccount();
@@ -1574,12 +1626,12 @@ firebase.push = (path, val) => {
       const pushInstance = firebase.instance.child(path).push();
 
       pushInstance.setValue(firebase.toValue(val))
-          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-            onSuccess: () => resolve({key: pushInstance.getKey()})
-          }))
-          .addOnFailureListener(new gmsTasks.OnFailureListener({
-            onFailure: exception => reject(exception.getMessage())
-          }));
+        .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+          onSuccess: () => resolve({ key: pushInstance.getKey() })
+        }))
+        .addOnFailureListener(new gmsTasks.OnFailureListener({
+          onFailure: exception => reject(exception.getMessage())
+        }));
 
     } catch (ex) {
       console.log("Error in firebase.push: " + ex);
@@ -1597,12 +1649,12 @@ firebase.setValue = (path, val) => {
       }
 
       firebase.instance.child(path).setValue(firebase.toValue(val))
-          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-            onSuccess: () => resolve()
-          }))
-          .addOnFailureListener(new gmsTasks.OnFailureListener({
-            onFailure: exception => reject(exception.getMessage())
-          }));
+        .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+          onSuccess: () => resolve()
+        }))
+        .addOnFailureListener(new gmsTasks.OnFailureListener({
+          onFailure: exception => reject(exception.getMessage())
+        }));
 
     } catch (ex) {
       console.log("Error in firebase.setValue: " + ex);
@@ -1629,16 +1681,16 @@ firebase.update = (path, val) => {
 
       if (typeof val === "object") {
         firebase.instance.child(path).updateChildren(firebase.toHashMap(val))
-            .addOnSuccessListener(onSuccessListener)
-            .addOnFailureListener(onFailureListener);
+          .addOnSuccessListener(onSuccessListener)
+          .addOnFailureListener(onFailureListener);
       } else {
         const lastPartOfPath = path.lastIndexOf("/");
         const pathPrefix = path.substring(0, lastPartOfPath);
         const pathSuffix = path.substring(lastPartOfPath + 1);
         const updateObject = '{"' + pathSuffix + '" : "' + val + '"}';
         firebase.instance.child(pathPrefix).updateChildren(firebase.toHashMap(JSON.parse(updateObject)))
-            .addOnSuccessListener(onSuccessListener)
-            .addOnFailureListener(onFailureListener);
+          .addOnSuccessListener(onSuccessListener)
+          .addOnFailureListener(onFailureListener);
       }
     } catch (ex) {
       console.log("Error in firebase.update: " + ex);
@@ -1786,12 +1838,12 @@ firebase.remove = path => {
       }
 
       firebase.instance.child(path).setValue(null)
-          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-            onSuccess: () => resolve()
-          }))
-          .addOnFailureListener(new gmsTasks.OnFailureListener({
-            onFailure: exception => reject(exception.getMessage())
-          }));
+        .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+          onSuccess: () => resolve()
+        }))
+        .addOnFailureListener(new gmsTasks.OnFailureListener({
+          onFailure: exception => reject(exception.getMessage())
+        }));
     } catch (ex) {
       console.log("Error in firebase.remove: " + ex);
       reject(ex);
@@ -1808,12 +1860,12 @@ class OnDisconnect implements OnDisconnectBase {
     return new Promise((resolve, reject) => {
       try {
         this.disconnectInstance.cancel()
-            .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-              onSuccess: () => resolve()
-            }))
-            .addOnFailureListener(new gmsTasks.OnFailureListener({
-              onFailure: exception => reject(exception.getMessage())
-            }));
+          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+            onSuccess: () => resolve()
+          }))
+          .addOnFailureListener(new gmsTasks.OnFailureListener({
+            onFailure: exception => reject(exception.getMessage())
+          }));
       } catch (ex) {
         console.log("Error in firebase.onDisconnect.cancel: " + ex);
         reject(ex);
@@ -1825,12 +1877,12 @@ class OnDisconnect implements OnDisconnectBase {
     return new Promise((resolve, reject) => {
       try {
         this.disconnectInstance.removeValue()
-            .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-              onSuccess: () => resolve()
-            }))
-            .addOnFailureListener(new gmsTasks.OnFailureListener({
-              onFailure: exception => reject(exception.getMessage())
-            }));
+          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+            onSuccess: () => resolve()
+          }))
+          .addOnFailureListener(new gmsTasks.OnFailureListener({
+            onFailure: exception => reject(exception.getMessage())
+          }));
       } catch (ex) {
         console.log("Error in firebase.onDisconnect.remove: " + ex);
         reject(ex);
@@ -1842,12 +1894,12 @@ class OnDisconnect implements OnDisconnectBase {
     return new Promise((resolve, reject) => {
       try {
         this.disconnectInstance.setValue(firebase.toValue(value))
-            .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-              onSuccess: () => resolve()
-            }))
-            .addOnFailureListener(new gmsTasks.OnFailureListener({
-              onFailure: exception => reject(exception.getMessage())
-            }));
+          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+            onSuccess: () => resolve()
+          }))
+          .addOnFailureListener(new gmsTasks.OnFailureListener({
+            onFailure: exception => reject(exception.getMessage())
+          }));
       } catch (ex) {
         console.log("Error in firebase.onDisconnect.set: " + ex);
         reject(ex);
@@ -1859,12 +1911,12 @@ class OnDisconnect implements OnDisconnectBase {
     return new Promise((resolve, reject) => {
       try {
         this.disconnectInstance.setValue(firebase.toValue(value), priority)
-            .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-              onSuccess: () => resolve()
-            }))
-            .addOnFailureListener(new gmsTasks.OnFailureListener({
-              onFailure: exception => reject(exception.getMessage())
-            }));
+          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+            onSuccess: () => resolve()
+          }))
+          .addOnFailureListener(new gmsTasks.OnFailureListener({
+            onFailure: exception => reject(exception.getMessage())
+          }));
       } catch (ex) {
         console.log("Error in firebase.onDisconnect.setWithPriority: " + ex);
         reject(ex);
@@ -1876,12 +1928,12 @@ class OnDisconnect implements OnDisconnectBase {
     return new Promise((resolve, reject) => {
       try {
         this.disconnectInstance.updateChildren(firebase.toHashMap(values))
-            .addOnSuccessListener(new gmsTasks.OnSuccessListener({
-              onSuccess: () => resolve()
-            }))
-            .addOnFailureListener(new gmsTasks.OnFailureListener({
-              onFailure: exception => reject(exception.getMessage())
-            }));
+          .addOnSuccessListener(new gmsTasks.OnSuccessListener({
+            onSuccess: () => resolve()
+          }))
+          .addOnFailureListener(new gmsTasks.OnFailureListener({
+            onFailure: exception => reject(exception.getMessage())
+          }));
       } catch (ex) {
         console.log("Error in firebase.onDisconnect.update: " + ex);
         reject(ex);
@@ -1900,7 +1952,7 @@ firebase.onDisconnect = (path: string): OnDisconnectBase => {
 };
 
 firebase.transaction = (path: string, transactionUpdate: (currentState) => any,
-                        onComplete: (a: Error | null, b: boolean, c: DataSnapshot) => Promise<any>) => {
+  onComplete: (a: Error | null, b: boolean, c: DataSnapshot) => Promise<any>) => {
   return new Promise((resolve, reject) => {
     if (!firebase.initialized) {
       console.error("Please run firebase.init() before firebase.transaction()");
@@ -1928,7 +1980,7 @@ firebase.transaction = (path: string, transactionUpdate: (currentState) => any,
       },
       onComplete: (databaseError: com.google.firebase.database.DatabaseError, commited: boolean, snapshot: com.google.firebase.database.DataSnapshot) => {
         databaseError !== null ? reject(databaseError.getMessage()) :
-            resolve({committed: commited, snapshot: nativeSnapshotToWebSnapshot(snapshot)});
+          resolve({ committed: commited, snapshot: nativeSnapshotToWebSnapshot(snapshot) });
       }
     });
     dbRef.runTransaction(handler);
@@ -1974,6 +2026,12 @@ firebase.enableLogging = (logging: boolean, persistent?: boolean) => {
 /***********************************************
  * END Realtime Database Functions
  ***********************************************/
+
+const ensureFirestore = (): void => {
+  if (typeof (com.google.firebase.firestore) === "undefined") {
+    throw new Error("Make sure 'firestore' is enabled in 'firebase.nativescript.json', then clean the node_modules and platforms folders");
+  }
+};
 
 class FirestoreWriteBatch implements firestore.WriteBatch {
 
@@ -2118,14 +2176,27 @@ firebase.firestore.settings = (settings: firestore.Settings) => {
   }
 };
 
+firebase.firestore.clearPersistence = (): Promise<void> => {
+  ensureFirestore();
+  return new Promise<void>((resolve, reject) => {
+    const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
+    const onSuccessListener = new gmsTasks.OnSuccessListener({
+      onSuccess: () => resolve()
+    });
+
+    const onFailureListener = new gmsTasks.OnFailureListener({
+      onFailure: exception => reject(exception.getMessage())
+    });
+
+    db.clearPersistence()
+      .addOnSuccessListener(onSuccessListener)
+      .addOnFailureListener(onFailureListener);
+  });
+};
+
 firebase.firestore.collection = (collectionPath: string): firestore.CollectionReference => {
+  ensureFirestore();
   try {
-
-    if (typeof (com.google.firebase.firestore) === "undefined") {
-      console.log("Make sure firebase-firestore is in the plugin's include.gradle");
-      return null;
-    }
-
     if (!firebase.initialized) {
       console.log("Please run firebase.init() before firebase.firestore.collection()");
       return null;
@@ -2135,6 +2206,17 @@ firebase.firestore.collection = (collectionPath: string): firestore.CollectionRe
     return firebase.firestore._getCollectionReference(db.collection(collectionPath));
   } catch (ex) {
     console.log("Error in firebase.firestore.collection: " + ex);
+    return null;
+  }
+};
+
+firebase.firestore.collectionGroup = (id: string): firestore.CollectionGroup => {
+  ensureFirestore();
+  try {
+    const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
+    return firebase.firestore._getCollectionGroupQuery(db.collectionGroup(id));
+  } catch (ex) {
+    console.log("Error in firebase.firestore.collectionGroup: " + ex);
     return null;
   }
 };
@@ -2156,15 +2238,15 @@ firebase.firestore.onDocumentSnapshot = (docRef: com.google.firebase.firestore.D
   }
 
   const listener = docRef.addSnapshotListener(options, new com.google.firebase.firestore.EventListener({
-        onEvent: ((snapshot: com.google.firebase.firestore.DocumentSnapshot, exception: com.google.firebase.firestore.FirebaseFirestoreException) => {
-          if (exception !== null) {
-            const error = "onDocumentSnapshot error code: " + exception.getCode();
-            onErrorCallback && onErrorCallback(new Error(error));
-            return;
-          }
-          onNextCallback && onNextCallback(new DocumentSnapshot(snapshot));
-        })
-      })
+    onEvent: ((snapshot: com.google.firebase.firestore.DocumentSnapshot, exception: com.google.firebase.firestore.FirebaseFirestoreException) => {
+      if (exception !== null) {
+        const error = "onDocumentSnapshot error code: " + exception.getCode();
+        onErrorCallback && onErrorCallback(new Error(error));
+        return;
+      }
+      onNextCallback && onNextCallback(new DocumentSnapshot(snapshot));
+    })
+  })
   );
 
   return () => listener.remove();
@@ -2213,6 +2295,7 @@ firebase.firestore._getDocumentReference = (docRef?: JDocumentReference): firest
     id: docRef.getId(),
     parent: firebase.firestore._getCollectionReference(docRef.getParent()),
     path: docRef.getPath(),
+    firestore: firebase.firestore,
     collection: cp => firebase.firestore.collection(`${collectionPath}/${docRef.getId()}/${cp}`),
     set: (data: any, options?: firestore.SetOptions) => firebase.firestore.set(collectionPath, docRef.getId(), data, options),
     get: (options?: firestore.GetOptions) => firebase.firestore.getDocument(collectionPath, docRef.getId(), options),
@@ -2220,6 +2303,16 @@ firebase.firestore._getDocumentReference = (docRef?: JDocumentReference): firest
     delete: () => firebase.firestore.delete(collectionPath, docRef.getId()),
     onSnapshot: (optionsOrCallback: firestore.SnapshotListenOptions | ((snapshot: DocumentSnapshot) => void), callbackOrOnError?: (docOrError: DocumentSnapshot | Error) => void, onError?: (error: Error) => void) => firebase.firestore.onDocumentSnapshot(docRef, optionsOrCallback, callbackOrOnError, onError),
     android: docRef
+  };
+};
+
+firebase.firestore._getCollectionGroupQuery = (query?: com.google.firebase.firestore.Query): firestore.CollectionGroup => {
+  if (!query) {
+    return null;
+  }
+
+  return {
+    where: (property: string, opStr: firestore.WhereFilterOp, value: any) => firebase.firestore.where(undefined, property, opStr, value, query)
   };
 };
 
@@ -2233,6 +2326,7 @@ firebase.firestore._getCollectionReference = (colRef?: JCollectionReference): fi
   return {
     id: colRef.getId(),
     parent: firebase.firestore._getDocumentReference(colRef.getParent()),
+    firestore: firebase.firestore,
     doc: (documentPath?: string) => firebase.firestore.doc(collectionPath, documentPath),
     add: document => firebase.firestore.add(collectionPath, document),
     get: (options?: firestore.GetOptions) => firebase.firestore.get(collectionPath, options),
@@ -2240,20 +2334,16 @@ firebase.firestore._getCollectionReference = (colRef?: JCollectionReference): fi
     orderBy: (fieldPath: string, directionStr: firestore.OrderByDirection): firestore.Query => firebase.firestore.orderBy(collectionPath, fieldPath, directionStr, colRef),
     limit: (limit: number): firestore.Query => firebase.firestore.limit(collectionPath, limit, colRef),
     onSnapshot: (optionsOrCallback: firestore.SnapshotListenOptions | ((snapshot: QuerySnapshot) => void), callbackOrOnError?: (snapshotOrError: QuerySnapshot | Error) => void, onError?: (error: Error) => void) => firebase.firestore.onCollectionSnapshot(colRef, optionsOrCallback, callbackOrOnError, onError),
-    startAfter: (snapshot: DocumentSnapshot): firestore.Query => firebase.firestore.startAfter(collectionPath, snapshot, colRef),
-    startAt: (snapshot: DocumentSnapshot): firestore.Query => firebase.firestore.startAt(collectionPath, snapshot, colRef),
-    endAt: (snapshot: DocumentSnapshot): firestore.Query => firebase.firestore.endAt(collectionPath, snapshot, colRef),
-    endBefore: (snapshot: DocumentSnapshot): firestore.Query => firebase.firestore.endBefore(collectionPath, snapshot, colRef),
+    startAfter: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.startAfter(collectionPath, snapshotOrFieldValue, fieldValues, colRef),
+    startAt: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.startAt(collectionPath, snapshotOrFieldValue, fieldValues, colRef),
+    endAt: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.endAt(collectionPath, snapshotOrFieldValue, fieldValues, colRef),
+    endBefore: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.endBefore(collectionPath, snapshotOrFieldValue, fieldValues, colRef)
   };
 };
 
 firebase.firestore.doc = (collectionPath: string, documentPath?: string): firestore.DocumentReference => {
+  ensureFirestore();
   try {
-    if (typeof (com.google.firebase.firestore) === "undefined") {
-      console.log("Make sure firebase-firestore is in the plugin's include.gradle");
-      return null;
-    }
-
     if (!firebase.initialized) {
       console.log("Please run firebase.init() before firebase.firestore.doc()");
       return null;
@@ -2270,24 +2360,15 @@ firebase.firestore.doc = (collectionPath: string, documentPath?: string): firest
 };
 
 firebase.firestore.docRef = (documentPath: string): firestore.DocumentReference => {
-  if (typeof (com.google.firebase.firestore) === "undefined") {
-    console.log("Make sure firebase-firestore is in the plugin's include.gradle");
-    return null;
-  }
-
+  ensureFirestore();
   const db: com.google.firebase.firestore.FirebaseFirestore = com.google.firebase.firestore.FirebaseFirestore.getInstance();
   return firebase.firestore._getDocumentReference(db.document(documentPath));
 };
 
 firebase.firestore.add = (collectionPath: string, document: any): Promise<firestore.DocumentReference> => {
+  ensureFirestore();
   return new Promise<firestore.DocumentReference>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onSuccessListener = new gmsTasks.OnSuccessListener({
@@ -2301,9 +2382,9 @@ firebase.firestore.add = (collectionPath: string, document: any): Promise<firest
       });
 
       db.collection(collectionPath)
-          .add(firebase.toValue(document))
-          .addOnSuccessListener(onSuccessListener)
-          .addOnFailureListener(onFailureListener);
+        .add(firebase.toValue(document))
+        .addOnSuccessListener(onSuccessListener)
+        .addOnFailureListener(onFailureListener);
 
     } catch (ex) {
       console.log("Error in firebase.firestore.add: " + ex);
@@ -2313,14 +2394,9 @@ firebase.firestore.add = (collectionPath: string, document: any): Promise<firest
 };
 
 firebase.firestore.set = (collectionPath: string, documentPath: string, document: any, options?: firestore.SetOptions): Promise<void> => {
+  ensureFirestore();
   return new Promise<void>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onSuccessListener = new gmsTasks.OnSuccessListener({
@@ -2334,14 +2410,14 @@ firebase.firestore.set = (collectionPath: string, documentPath: string, document
       const docRef: com.google.firebase.firestore.DocumentReference = db.collection(collectionPath).document(documentPath);
       if (options && options.merge) {
         docRef
-            .set(firebase.toValue(document), com.google.firebase.firestore.SetOptions.merge())
-            .addOnSuccessListener(onSuccessListener)
-            .addOnFailureListener(onFailureListener);
+          .set(firebase.toValue(document), com.google.firebase.firestore.SetOptions.merge())
+          .addOnSuccessListener(onSuccessListener)
+          .addOnFailureListener(onFailureListener);
       } else {
         docRef
-            .set(firebase.toValue(document))
-            .addOnSuccessListener(onSuccessListener)
-            .addOnFailureListener(onFailureListener);
+          .set(firebase.toValue(document))
+          .addOnSuccessListener(onSuccessListener)
+          .addOnFailureListener(onFailureListener);
       }
 
     } catch (ex) {
@@ -2352,14 +2428,9 @@ firebase.firestore.set = (collectionPath: string, documentPath: string, document
 };
 
 firebase.firestore.update = (collectionPath: string, documentPath: string, document: any): Promise<void> => {
+  ensureFirestore();
   return new Promise<void>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onSuccessListener = new gmsTasks.OnSuccessListener({
@@ -2372,9 +2443,9 @@ firebase.firestore.update = (collectionPath: string, documentPath: string, docum
 
       const docRef: com.google.firebase.firestore.DocumentReference = db.collection(collectionPath).document(documentPath);
       docRef
-          .update(firebase.toValue(document))
-          .addOnSuccessListener(onSuccessListener)
-          .addOnFailureListener(onFailureListener);
+        .update(firebase.toValue(document))
+        .addOnSuccessListener(onSuccessListener)
+        .addOnFailureListener(onFailureListener);
 
     } catch (ex) {
       console.log("Error in firebase.firestore.update: " + ex);
@@ -2384,14 +2455,9 @@ firebase.firestore.update = (collectionPath: string, documentPath: string, docum
 };
 
 firebase.firestore.delete = (collectionPath: string, documentPath: string): Promise<void> => {
+  ensureFirestore();
   return new Promise<void>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onSuccessListener = new gmsTasks.OnSuccessListener({
@@ -2404,9 +2470,9 @@ firebase.firestore.delete = (collectionPath: string, documentPath: string): Prom
 
       const docRef: com.google.firebase.firestore.DocumentReference = db.collection(collectionPath).document(documentPath);
       docRef
-          .delete()
-          .addOnSuccessListener(onSuccessListener)
-          .addOnFailureListener(onFailureListener);
+        .delete()
+        .addOnSuccessListener(onSuccessListener)
+        .addOnFailureListener(onFailureListener);
 
     } catch (ex) {
       console.log("Error in firebase.firestore.delete: " + ex);
@@ -2416,14 +2482,9 @@ firebase.firestore.delete = (collectionPath: string, documentPath: string): Prom
 };
 
 firebase.firestore.getCollection = (collectionPath: string, options?: firestore.GetOptions): Promise<firestore.QuerySnapshot> => {
+  ensureFirestore();
   return new Promise<firestore.QuerySnapshot>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onCompleteListener = new gmsTasks.OnCompleteListener({
@@ -2448,8 +2509,8 @@ firebase.firestore.getCollection = (collectionPath: string, options?: firestore.
       }
 
       db.collection(collectionPath)
-          .get(source)
-          .addOnCompleteListener(onCompleteListener);
+        .get(source)
+        .addOnCompleteListener(onCompleteListener);
 
     } catch (ex) {
       console.log("Error in firebase.firestore.getCollection: " + ex);
@@ -2463,14 +2524,9 @@ firebase.firestore.get = (collectionPath: string, options?: firestore.GetOptions
 };
 
 firebase.firestore.getDocument = (collectionPath: string, documentPath: string, options?: firestore.GetOptions): Promise<firestore.DocumentSnapshot> => {
+  ensureFirestore();
   return new Promise<firestore.DocumentSnapshot>((resolve, reject) => {
     try {
-
-      if (typeof (com.google.firebase.firestore) === "undefined") {
-        reject("Make sure firebase-firestore is in the plugin's include.gradle");
-        return;
-      }
-
       const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
 
       const onCompleteListener = new gmsTasks.OnCompleteListener({
@@ -2495,9 +2551,9 @@ firebase.firestore.getDocument = (collectionPath: string, documentPath: string, 
       }
 
       db.collection(collectionPath)
-          .document(documentPath)
-          .get(source)
-          .addOnCompleteListener(onCompleteListener);
+        .document(documentPath)
+        .get(source)
+        .addOnCompleteListener(onCompleteListener);
 
     } catch (ex) {
       console.log("Error in firebase.firestore.getDocument: " + ex);
@@ -2526,20 +2582,17 @@ firebase.firestore._getQuery = (collectionPath: string, query: com.google.fireba
     orderBy: (fp: string, directionStr: firestore.OrderByDirection): firestore.Query => firebase.firestore.orderBy(collectionPath, fp, directionStr, query),
     limit: (limit: number): firestore.Query => firebase.firestore.limit(collectionPath, limit, query),
     onSnapshot: (optionsOrCallback: firestore.SnapshotListenOptions | ((snapshot: QuerySnapshot) => void), callbackOrOnError?: (snapshotOrError: QuerySnapshot | Error) => void, onError?: (error: Error) => void) => firebase.firestore.onCollectionSnapshot(query, optionsOrCallback, callbackOrOnError, onError),
-    startAfter: (snapshot: DocumentSnapshot) => firebase.firestore.startAfter(collectionPath, snapshot, query),
-    startAt: (snapshot: DocumentSnapshot) => firebase.firestore.startAt(collectionPath, snapshot, query),
-    endAt: (snapshot: DocumentSnapshot) => firebase.firestore.endAt(collectionPath, snapshot, query),
-    endBefore: (snapshot: DocumentSnapshot) => firebase.firestore.endBefore(collectionPath, snapshot, query),
+    startAfter: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.startAfter(collectionPath, snapshotOrFieldValue, fieldValues, query),
+    startAt: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.startAt(collectionPath, snapshotOrFieldValue, fieldValues, query),
+    endAt: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.endAt(collectionPath, snapshotOrFieldValue, fieldValues, query),
+    endBefore: (snapshotOrFieldValue: DocumentSnapshot | any, ...fieldValues: any[]): firestore.Query => firebase.firestore.endBefore(collectionPath, snapshotOrFieldValue, fieldValues, query),
+    firestore: firebase.firestore
   };
 };
 
 firebase.firestore.where = (collectionPath: string, fieldPath: string, opStr: firestore.WhereFilterOp, value: any, query?: com.google.firebase.firestore.Query): firestore.Query => {
+  ensureFirestore();
   try {
-    if (typeof (com.google.firebase.firestore) === "undefined") {
-      console.log("Make sure firebase-firestore is in the plugin's include.gradle");
-      return null;
-    }
-
     const db = com.google.firebase.firestore.FirebaseFirestore.getInstance();
     query = query || db.collection(collectionPath);
 
@@ -2553,9 +2606,12 @@ firebase.firestore.where = (collectionPath: string, fieldPath: string, opStr: fi
       query = query.whereGreaterThanOrEqualTo(fieldPath, firebase.toValue(value));
     } else if (opStr === ">") {
       query = query.whereGreaterThan(fieldPath, firebase.toValue(value));
+    } else if (opStr === "in") {
+      query = query.whereIn(fieldPath, firebase.toValue(value));
     } else if (opStr === "array-contains") {
-      // TODO remove 'any' when typings have been updated
-      query = (<any>query).whereArrayContains(fieldPath, firebase.toValue(value));
+      query = query.whereArrayContains(fieldPath, firebase.toValue(value));
+    } else if (opStr === "array-contains-any") {
+      query = query.whereArrayContainsAny(fieldPath, firebase.toValue(value));
     } else {
       console.log("Illegal argument for opStr: " + opStr);
       return null;
@@ -2579,20 +2635,33 @@ firebase.firestore.limit = (collectionPath: string, limit: number, query: com.go
   return firebase.firestore._getQuery(collectionPath, query);
 };
 
-firebase.firestore.startAfter = (collectionPath: string, snapshot: DocumentSnapshot, query: com.google.firebase.firestore.Query): firestore.Query => {
-  return firebase.firestore._getQuery(collectionPath, query.startAfter(snapshot.android));
+firebase.firestore.startAfter = (collectionPath: string, snapshotOrFieldValue: DocumentSnapshot | any, fieldValues: any[], query: com.google.firebase.firestore.Query): firestore.Query => {
+  return firebase.firestore._getQuery(collectionPath, query.startAfter(firebase.firestore._getSnapshotOrFieldValues(snapshotOrFieldValue, fieldValues)));
 };
 
-firebase.firestore.startAt = (collectionPath: string, snapshot: DocumentSnapshot, query: com.google.firebase.firestore.Query): firestore.Query => {
-  return firebase.firestore._getQuery(collectionPath, query.startAt(snapshot.android));
+firebase.firestore.startAt = (collectionPath: string, snapshotOrFieldValue: DocumentSnapshot | any, fieldValues: any[], query: com.google.firebase.firestore.Query): firestore.Query => {
+  return firebase.firestore._getQuery(collectionPath, query.startAt(firebase.firestore._getSnapshotOrFieldValues(snapshotOrFieldValue, fieldValues)));
 };
 
-firebase.firestore.endAt = (collectionPath: string, snapshot: DocumentSnapshot, query: com.google.firebase.firestore.Query): firestore.Query => {
-  return firebase.firestore._getQuery(collectionPath, query.endAt(snapshot.android));
+firebase.firestore.endAt = (collectionPath: string, snapshotOrFieldValue: DocumentSnapshot | any, fieldValues: any[], query: com.google.firebase.firestore.Query): firestore.Query => {
+  return firebase.firestore._getQuery(collectionPath, query.endAt(firebase.firestore._getSnapshotOrFieldValues(snapshotOrFieldValue, fieldValues)));
 };
 
-firebase.firestore.endBefore = (collectionPath: string, snapshot: DocumentSnapshot, query: com.google.firebase.firestore.Query): firestore.Query => {
-  return firebase.firestore._getQuery(collectionPath, query.endBefore(snapshot.android));
+firebase.firestore.endBefore = (collectionPath: string, snapshotOrFieldValue: DocumentSnapshot | any, fieldValues: any[], query: com.google.firebase.firestore.Query): firestore.Query => {
+  return firebase.firestore._getQuery(collectionPath, query.endBefore(firebase.firestore._getSnapshotOrFieldValues(snapshotOrFieldValue, fieldValues)));
+};
+
+firebase.firestore._getSnapshotOrFieldValues = (snapshotOrFieldValue: DocumentSnapshot | any, fieldValues: any[]): any => {
+  if (snapshotOrFieldValue && snapshotOrFieldValue.android) {
+    return snapshotOrFieldValue.android;
+  } else {
+    const AllFieldValues = [snapshotOrFieldValue, ...fieldValues];
+    const javaArray = Array.create('java.lang.Object', AllFieldValues.length);
+    AllFieldValues.forEach((value, index) => {
+      javaArray[index] = firebase.toValue(value);
+    });
+    return javaArray;
+  }
 };
 
 export type JDocumentReference = com.google.firebase.firestore.DocumentReference;

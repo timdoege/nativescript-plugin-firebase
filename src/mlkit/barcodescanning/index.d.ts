@@ -16,6 +16,7 @@ export interface MLKitScanBarcodesResultBounds {
 
 export interface MLKitScanBarcodesResultBarcode {
   value: string;
+  displayValue: string;
   format: string;
   bounds: MLKitScanBarcodesResultBounds;
   image: {
@@ -49,10 +50,10 @@ export interface MLKitScanBarcodesOnDeviceOptions extends MLKitVisionOptions {
    */
   reportDuplicates?: boolean;
 
-    /**
-     * Support for scanning inverse barcodes.
-     * Default false.
-     */
+  /**
+   * Support for scanning inverse barcodes.
+   * Default false.
+   */
   supportInverseBarcodes?: boolean;
 }
 

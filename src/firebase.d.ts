@@ -36,7 +36,11 @@ export enum LoginType {
    * This requires you to pass in the 'emailLinkOptions' as well.
    * Note that 'Firebase Dynamic Links' must be enabled for this login type to work.
    */
-  EMAIL_LINK
+  EMAIL_LINK,
+  /**
+   * Apple
+   */
+  APPLE
 }
 
 export enum LogComplexEventTypeParameter {
@@ -264,6 +268,14 @@ export interface FirebasePhoneLoginOptions {
    * Default: "Verification code".
    */
   verificationPrompt?: string;
+  android?: {
+    /**
+     * The maximum amount of time you are willing to wait for SMS auto-retrieval to be completed by the library. Maximum allowed value is 2 minutes. Use 0 to disable SMS-auto-retrieval. If you specified a positive value less than 30 seconds, library will default to 30 seconds.
+     * Default: 60 (seconds)
+     * See: https://firebase.google.com/docs/reference/android/com/google/firebase/auth/PhoneAuthProvider
+     */
+    timeout: number;
+  };
 }
 
 export interface FirebaseGoogleLoginOptions {
@@ -281,6 +293,21 @@ export interface FirebaseFacebookLoginOptions {
    * Default: ["public_profile", "email"]
    */
   scopes?: Array<string>;
+}
+
+export type AppleLoginScope = "name" | "email";
+
+export interface AppleLoginOptions {
+  /**
+   * Default: ["name", "email"]
+   */
+  scopes?: Array<AppleLoginScope>;
+  /**
+   * Android only.
+   * Supported locales: https://developer.apple.com/documentation/signinwithapplejs/incorporating_sign_in_with_apple_into_other_platforms#3332112
+   * Default: "en".
+   */
+  locale?: string;
 }
 
 export interface FirebaseCustomLoginOptions {
@@ -312,6 +339,7 @@ export interface LoginOptions {
   phoneOptions?: FirebasePhoneLoginOptions;
   googleOptions?: FirebaseGoogleLoginOptions;
   facebookOptions?: FirebaseFacebookLoginOptions;
+  appleOptions?: AppleLoginOptions;
   customOptions?: FirebaseCustomLoginOptions;
   ios?: LoginIOSOptions;
 
@@ -548,6 +576,11 @@ export interface Message {
    * Any other data you may have added to the notification.
    */
   data: any;
+  /**
+   * Indicates whether or not the notification was tapped.
+   * iOS only.
+   */
+  notificationTapped?: boolean;
 }
 
 export function init(options?: InitOptions): Promise<any>;
@@ -643,7 +676,7 @@ export namespace dynamicLinks {
 
 export namespace firestore {
   export type DocumentData = { [field: string]: any };
-  export type WhereFilterOp = '<' | '<=' | '==' | '>=' | '>' | 'array-contains';
+  export type WhereFilterOp = '<' | '<=' | '==' | '>=' | '>' | 'in' | 'array-contains' | 'array-contains-any';
   export type OrderByDirection = 'desc' | 'asc';
 
   export interface GeoPoint {
@@ -787,6 +820,8 @@ export namespace firestore {
 
     readonly path: string;
 
+    readonly firestore: any;
+
     collection: (collectionPath: string) => CollectionReference;
 
     set: (document: any, options?: SetOptions) => Promise<void>;
@@ -805,6 +840,8 @@ export namespace firestore {
   }
 
   export interface Query {
+    readonly firestore: any;
+
     get(options?: GetOptions): Promise<QuerySnapshot>;
 
     where(fieldPath: string, opStr: WhereFilterOp, value: any): Query;
@@ -817,11 +854,23 @@ export namespace firestore {
 
     startAt(snapshot: DocumentSnapshot): Query;
 
+    startAt(...fieldValues: any[]): Query;
+
     startAfter(snapshot: DocumentSnapshot): Query;
+
+    startAfter(...fieldValues: any[]): Query;
 
     endAt(snapshot: DocumentSnapshot): Query;
 
+    endAt(...fieldValues: any[]): Query;
+
     endBefore(snapshot: DocumentSnapshot): Query;
+
+    endBefore(...fieldValues: any[]): Query;
+  }
+
+  export interface CollectionGroup {
+    where(fieldPath: string, opStr: WhereFilterOp, value: any): Query;
   }
 
   export interface CollectionReference extends Query {
@@ -970,6 +1019,8 @@ export namespace firestore {
 
   function collection(collectionPath: string): CollectionReference;
 
+  function collectionGroup(id: string): CollectionGroup;
+
   function doc(collectionPath: string, documentPath?: string): DocumentReference;
 
   function docRef(documentPath: string): DocumentReference;
@@ -987,18 +1038,24 @@ export namespace firestore {
   function runTransaction(updateFunction: (transaction: firestore.Transaction) => Promise<any>): Promise<void>;
 
   function batch(): firestore.WriteBatch;
+
+  function clearPersistence(): Promise<void>;
 }
 
 export namespace functions {
+  export type SupportedRegions = "us-central1" | "us-east1" | "us-east4" | "europe-west1" | "europe-west2" | "asia-east2" | "asia-northeast1";
+
   export type HttpsCallable<I, O> = (callableData: I) => Promise<O>;
 
-  export function httpsCallable<I, O>(callableFunctionName: string): HttpsCallable<I, O>;
+  export function httpsCallable<I, O>(callableFunctionName: string, region?: SupportedRegions): HttpsCallable<I, O>;
+
+  export function useFunctionsEmulator(origin: string): void;
 }
 
 // Auth
 export function login(options: LoginOptions): Promise<User>;
 
-export function reauthenticate(options: ReauthenticateOptions): Promise<any>;
+export function reauthenticate(options: ReauthenticateOptions): Promise<User>;
 
 export function reloadUser(): Promise<void>;
 

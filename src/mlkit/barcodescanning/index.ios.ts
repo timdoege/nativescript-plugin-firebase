@@ -1,7 +1,6 @@
 import { ImageSource } from "tns-core-modules/image-source";
 import { ios as iosUtils } from "tns-core-modules/utils/utils";
 import { MLKitScanBarcodesOnDeviceOptions, MLKitScanBarcodesOnDeviceResult } from "./index";
-import { MLKitVisionOptions } from "../index";
 import { BarcodeFormat, MLKitBarcodeScanner as MLKitBarcodeScannerBase } from "./barcodescanning-common";
 
 export { BarcodeFormat };
@@ -78,6 +77,7 @@ export class MLKitBarcodeScanner extends MLKitBarcodeScannerBase {
 
           result.barcodes.push({
             value: barcode.rawValue,
+            displayValue: barcode.displayValue,
             format: BarcodeFormat[barcode.format],
             ios: barcode,
             bounds: {
@@ -160,6 +160,7 @@ export function scanBarcodesOnDevice(options: MLKitScanBarcodesOnDeviceOptions):
             const barcode: FIRVisionBarcode = barcodes.objectAtIndex(i);
             result.barcodes.push({
               value: barcode.rawValue,
+              displayValue: barcode.displayValue,
               format: BarcodeFormat[barcode.format],
               ios: barcode,
               bounds: barcode.frame,
